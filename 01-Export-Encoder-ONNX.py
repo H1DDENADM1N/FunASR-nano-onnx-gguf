@@ -45,7 +45,7 @@ WINDOW_LENGTH = 400
 HOP_LENGTH = 160
 PRE_EMPHASIZE = 0.97
 LFR_M = 7
-LFR_N = 6
+LFR_N = 8
 MAX_INPUT_AUDIO_LENGTH = SAMPLE_RATE * 30 # 30s
 OPSET = 18 # 匹配建议的 opset 以避免转换失败
 
@@ -184,14 +184,15 @@ def main():
 
     with torch.no_grad():
         print(f"\n[1/4] Exporting Encoder Branch...")
-        enc_wrapper = EncoderExportWrapper(hybrid, custom_stft)
+        enc_wrapper = EncoderExportWrapper(hybrid, custom_stft, lfr_m=LFR_M, lfr_n=LFR_N)
         audio = torch.ones((1, 1, SAMPLE_RATE * 5), dtype=torch.int16)
         query = torch.ones((1, 10, 1024), dtype=torch.float32)
         torch.onnx.export(
             enc_wrapper, (audio, query), onnx_encoder_fp32,
             input_names=['audio', 'query_embed'], output_names=['concat_embed', 'ids_len', 'enc_output'],
             dynamic_axes={'audio': {2: 'audio_len'}, 'query_embed': {1: 'num_token'}, 'concat_embed': {1: 'num_token'}, 'enc_output': {1: 'enc_len'}},
-            opset_version=OPSET
+            opset_version=OPSET,
+            dynamo=False
         )
         print(f"\n[2/4] Exporting CTC Head...")
         ctc_wrapper = CTCHeadExportWrapper(hybrid)

@@ -40,7 +40,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # 模型路径
 MODEL_DIR           = os.path.join(SCRIPT_DIR, "model-gguf")
-ENCODER_ONNX_PATH   = os.path.join(MODEL_DIR, "Fun-ASR-Nano-Encoder.int8.onnx")  
+ENCODER_ONNX_PATH   = os.path.join(MODEL_DIR, "Fun-ASR-Nano-Encoder-Adaptor.int8.onnx")  
 CTC_ONNX_PATH       = os.path.join(MODEL_DIR, "Fun-ASR-Nano-CTC.int8.onnx")
 DECODER_GGUF_PATH   = os.path.join(MODEL_DIR, "Fun-ASR-Nano-Decoder.q8_0.gguf")
 TOKENS_PATH         = os.path.join(MODEL_DIR, "tokens.txt")
@@ -493,24 +493,26 @@ def encode_audio(audio, encoder_sess):
     """使用 ONNX Encoder 获取 LLM 嵌入和 CTC 特征"""
     import onnxruntime
     
-    # Reshape: (1, 1, audio_len)
-    audio_input = audio.reshape(1, 1, -1)
-    query_embed = np.ones((1, 10, 1024), dtype=np.float32)
+    # Reshape: (1, 1, audio_len) and cast to float32
+    audio_input = audio.astype(np.float32).reshape(1, 1, -1)
+    # query_embed is no longer needed/used in the new export script, passing audio only
     
     in_names = [x.name for x in encoder_sess.get_inputs()]
     out_names = [x.name for x in encoder_sess.get_outputs()]
     
-    # 输入: audio, query_embed
-    # 输出: concat_embed, ids_len, enc_output
+    # 输入: audio
+    # 输出: enc_output, adaptor_output
     input_feed = {
-        in_names[0]: onnxruntime.OrtValue.ortvalue_from_numpy(audio_input, 'cpu', 0),
-        in_names[1]: onnxruntime.OrtValue.ortvalue_from_numpy(query_embed, 'cpu', 0),
+        in_names[0]: onnxruntime.OrtValue.ortvalue_from_numpy(audio_input, 'cpu', 0)
     }
     
     outputs = encoder_sess.run_with_ort_values(out_names, input_feed)
     
-    audio_embd = outputs[0].numpy().squeeze(0) # [N, 1024]
-    enc_output = outputs[2].numpy()           # [1, T, 512]
+    # Output 0: enc_output [1, T_enc, 512] (For CTC)
+    enc_output = outputs[0].numpy()
+    
+    # Output 1: adaptor_output [1, T_llm, 1024] (For LLM)
+    audio_embd = outputs[1].numpy().squeeze(0) 
     
     return audio_embd, enc_output
 
