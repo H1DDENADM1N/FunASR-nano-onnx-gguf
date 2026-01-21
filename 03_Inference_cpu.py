@@ -265,7 +265,20 @@ def main():
     
     logger.info(f"Prefix Shape: {prefix_emb.shape}, Suffix Shape: {suffix_emb.shape}")
 
-    # 5. 初始化 ONNX Audio Encoder
+    # 5. 保存 Prefix 和 Suffix Embedding 到 PKL 文件
+    os.makedirs("pickles", exist_ok=True)
+    prefix_pkl_path = "pickles/prefix_embedding.pkl"
+    suffix_pkl_path = "pickles/suffix_embedding.pkl"
+
+    with open(prefix_pkl_path, "wb") as f:
+        pickle.dump(prefix_emb, f)
+    logger.info(f"✓ Prefix embedding 已保存到: {prefix_pkl_path}")
+
+    with open(suffix_pkl_path, "wb") as f:
+        pickle.dump(suffix_emb, f)
+    logger.info(f"✓ Suffix embedding 已保存到: {suffix_pkl_path}\n")
+
+    # 6. 初始化 ONNX Audio Encoder
     print('\nLoading ONNX Audio Encoder...')
     session_opts = onnxruntime.SessionOptions()
     session_opts.graph_optimization_level = onnxruntime.GraphOptimizationLevel.ORT_ENABLE_ALL
@@ -329,6 +342,11 @@ def main():
             # 注意: audio_features 是 (1, N, 1024)，prefix/suffix 是 (N, 1024)
             # 统一成 (N, 1024)
             audio_features_sq = audio_features.squeeze(0) 
+
+            audio_pkl_path = "pickles/audio_embedding.pkl"
+            with open(audio_pkl_path, "wb") as f:
+                pickle.dump(audio_features_sq, f)
+            logger.info(f"✓ Audio embedding 已保存到: {audio_pkl_path}")
             
             final_embedding = np.concatenate([prefix_emb, audio_features_sq, suffix_emb], axis=0)
             

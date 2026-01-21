@@ -51,9 +51,8 @@ gguf_model_path = f'{model_dir}/qwen3-0.6b-asr-q8_0.gguf'
 test_audio = r'./input.mp3'
 
 # Prompt 配置 (Prefix + Audio + Suffix)
-# 注意：Audio Encoder 已经移除了硬编码的 Prompt，现在需要我们手动拼接。
-PREFIX_PROMPT = "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n"
-SUFFIX_PROMPT = "<|im_end|>\n<|im_start|>assistant\n"
+PREFIX_PROMPT = "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n语音转写："
+SUFFIX_PROMPT = "\n<|im_end|>\n<|im_start|>assistant"
 
 # 音频处理参数 (需与模型训练时一致)
 SAMPLE_RATE = 16000
@@ -293,7 +292,7 @@ def main():
         model_path=gguf_model_path,
         n_ctx=MAX_SEQ_LEN + 1024, # 适当增加 Context 窗口
         n_threads=MAX_THREADS,
-        embedding=True, # 必须开启
+        embedding=False, 
         verbose=False
     )
     print('GGUF model loaded successfully!')
@@ -303,8 +302,8 @@ def main():
     all_embeddings = load_gguf_embeddings(gguf_model_path)
     
     # 4. 准备 Prefix 和 Suffix 的 Embeddings
-    prefix_tokens = tokenizer.encode(PREFIX_PROMPT, add_special_tokens=False) 
-    suffix_tokens = tokenizer.encode(SUFFIX_PROMPT, add_special_tokens=False)
+    prefix_tokens = tokenizer.encode(PREFIX_PROMPT, add_special_tokens=True) 
+    suffix_tokens = tokenizer.encode(SUFFIX_PROMPT, add_special_tokens=True)
     
     prefix_emb = all_embeddings[prefix_tokens]
     suffix_emb = all_embeddings[suffix_tokens]

@@ -44,7 +44,7 @@ LFR_M = 7
 LFR_N = 6
 STOP_TOKEN = [151643, 151645]
 MAX_SEQ_LEN = 1024
-MAX_INPUT_AUDIO_LENGTH = 320000
+MAX_INPUT_AUDIO_LENGTH = SAMPLE_RATE * 30
 SLIDING_WINDOW = 0
 DYNAMIC_AXES = True
 BEAM_SIZE = 3
@@ -377,6 +377,3 @@ def export():
 if __name__ == "__main__":
     export()
 
-
-if __name__ == "__main__":
-    export()
