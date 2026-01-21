@@ -41,9 +41,11 @@ setup_ffmpeg()
 # =========================================================================
 # Vulkan 选项
 # =========================================================================
-# os.environ["VK_ICD_FILENAMES"] = "none"       # 禁止 Vulkan
-# os.environ["GGML_VK_VISIBLE_DEVICES"] = "0"   # 禁止 Vulkan 用独显（强制用集显）
-# os.environ["GGML_VK_DISABLE_F16"] = "1"       # 禁止 VulkanFP16 计算（Intel集显fp16有溢出问题）
+os.environ["VK_ICD_FILENAMES"] = "none"  # 禁止 Vulkan
+os.environ["GGML_VK_VISIBLE_DEVICES"] = "0"  # 禁止 Vulkan 用独显（强制用集显）
+os.environ["GGML_VK_DISABLE_F16"] = (
+    "1"  # 禁止 VulkanFP16 计算（Intel集显fp16有溢出问题）
+)
 
 # =========================================================================
 
@@ -69,7 +71,7 @@ GGML_BASE_DLL_PATH = os.path.join(BIN_DIR, "ggml-base.dll")
 TEST_WAVS_DIR = os.path.join(SCRIPT_DIR, "test_wavs")
 
 # ASR Prompts
-hotwords = "睡前消息, Claude Code"
+hotwords = ""
 PREFIX_PROMPT = (
     " <|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n"
 )
