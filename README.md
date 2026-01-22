@@ -1,139 +1,330 @@
-# FunASR-Nano GGUF 转换与推理指南
+# Fun-ASR-GGUF
 
-本项目提供了一套完整的脚本，用于将 FunASR-Nano 模型转换为 GGUF 格式，并实现纯本地推理（支持 ONNX Encoder + GGUF Decoder）。
+将 [Fun-ASR-Nano](https://www.modelscope.cn/models/FunAudioLLM/Fun-ASR-Nano-2512) 模型转换为可以在本地高效运行的格式，实现**准确、快速的离线语音识别**。主要依赖了 [llama.cpp](https://github.com/ggml-org/llama.cpp) 对 LLM Decoder 的加速推理。
 
-## 1. 准备工作
+### 核心特性
 
-请在项目根目录下，下载模型文件，以及克隆以下三个必要的仓库代码：
+- ✅ **纯本地运行** - 无需网络，数据不外传
+- ✅ **速度快** - 混合推理架构，支持 GPU 加速
+- ✅ **准确率高** - Encoder 保持 FP32 精度
+- ✅ **内存占用小** - CTC Decoder 和 LLM Decoder 使用 INT8 量化
+- ✅ **上下文增强** - 可提供上下文信息，进一步提升识别准确率
+- ✅ **支持热词** - 通过 CTC 预识别提取热词，提高专业领域识别准确率
+- ✅ **时间戳精确** - 字符级时间戳对齐
+- ✅ **较长音频支持** - 单次可识别长达 60 秒的音频
 
-```powershell
-# 1. 下载 FunASR-Nano 模型 (需安装 modelscope)
+---
+
+## 快速开始
+
+### 1. 安装依赖
+
+导出模型需要：
+
+```bash
+pip install torch torchaudio transformers onnxruntime modelscope
+```
+
+推理需要：
+
+```bash
+pip install onnx onnxruntime numpy pydub gguf
+```
+
+>  `pydub` 用于音频格式转换，需要系统安装 [ffmpeg](https://ffmpeg.org/download.html)
+
+
+从 [llama.cpp Releases](https://github.com/ggml-org/llama.cpp/releases) 下载预编译二进制文件：
+
+- Windows: 下载 `llama-bXXXX-bin-win-vulkan-x64.zip`
+
+解压后将以 `dll` 文件放入 `fun_asr_gguf/` 文件夹：
+
+> MacOS 和 Linux 也有对应的预编译文件，但我没有做测试
+
+### 2. 下载模型（可选，如已有导出模型可跳过）
+
+下载原始模型
+
+```bash
 pip install modelscope
 modelscope download --model FunAudioLLM/Fun-ASR-Nano-2512 --local_dir ./Fun-ASR-Nano-2512
-
-# 2. 克隆 FunASR 源代码 (用于模型导出)
-git clone https://github.com/FunAudioLLM/Fun-ASR.git
-
-# 3. 克隆 llama.cpp 源代码 (用于 GGUF 转换)
-git clone https://github.com/ggml-org/llama.cpp.git
-
-# 4. 克隆 llama-cpp-python 源代码 (用于供 AI 查询 API，修改脚本)
-git clone https://github.com/abetlen/llama-cpp-python.git
 ```
 
-
-## 2. 环境依赖
-
-确保已安装以下 Python 库：
+导出模型
 
 ```bash
-pip install torch torchaudio transformers numpy onnx pydub onnxruntime funasr
-# 如果需要 GPU 支持
-# pip install onnxruntime-gpu
+# 导出 Encoder (FP32) + CTC Decoder (INT8)
+python 01-Export-Encoder-Adaptor-CTC.py
+
+# 导出 LLM Decoder (INT8)
+python 02-Export-Decoder-GGUF.py
 ```
 
-以及 `llama-cpp-python` (用于推理)：
-```bash
-pip install llama-cpp-python
+### 3. 运行识别
+
+```python
+from fun_asr_gguf import create_asr_engine
+
+engine = create_asr_engine(
+    encoder_onnx_path="model/Fun-ASR-Nano-Encoder-Adaptor.fp32.onnx",
+    ctc_onnx_path="model/Fun-ASR-Nano-CTC.int8.onnx",
+    decoder_gguf_path="model/Fun-ASR-Nano-Decoder.q8_0.gguf",
+    tokens_path="model/tokens.txt",
+)
+engine.initialize()
+
+result = engine.transcribe("audio.mp3", language="中文")
+print(result.text)
 ```
 
-## 3. 执行步骤
+就这么简单！
 
-### 第一步：导出 ONNX 模型 (Audio Encoder)
+> 单段音频长度在60秒内可准确识别，过长会有问题
 
-运行脚本 `01_Export_ONNX.py`：
+---
 
-```powershell
-python 01_Export_ONNX.py
+## 工作原理
+
+```
+音频输入
+    ↓
+┌─────────────────────────────────────────────┐
+│  Encoder (ONNX, FP32)        → 音频特征      │  保持最高精度
+│  CTC Decoder (ONNX, INT8)    → 粗识别结果    │  快速预识别
+└─────────────────────────────────────────────┘
+    ↓              ↓              ↓
+  音频特征      时间戳         热词候选
+    ↓              ↓              ↓
+┌─────────────────────────────────────────────┐
+│  构建 Prompt (Prefix + 音频 + Suffix)        │
+└─────────────────────────────────────────────┘
+    ↓
+┌─────────────────────────────────────────────┐
+│  LLM Decoder (GGUF, INT8, llama.cpp)        │  支持 Vulkan GPU
+│  ↓                                          │
+│  生成最终识别文本                             │
+└─────────────────────────────────────────────┘
+    ↓
+  时间戳对齐 → 输出结果
 ```
 
-*   **功能**：加载 FunASR 模型，提取音频编码器（Encoder）和 Embedding层，导出为 ONNX 格式。
-*   **输出**：`model-gguf/` 目录下的 `.onnx` 文件。
+### 为什么这样做？
 
-### 第二步：导出 GGUF 模型 (LLM Decoder)
+1. **CTC 预识别** 提供两样东西：
+   - 粗识别结果（用于筛选热词，提供给LLM）
+   - 时间戳信息（为LLM的文本输出赋予时间戳）
 
-运行脚本 `02_Export_GGUF.py`：
+2. **混合架构** 各取所长：
+   - ONNX Runtime：运行 Encoder 和 CTC，稳定可靠
+   - llama.cpp：运行 LLM，支持 GPU 加速(Vulkan, Metal)，速度超快
 
-```powershell
-python 02_Export_GGUF.py
+3. **精度策略**：
+   - **Encoder 用 FP32** - 保证识别准确率（INT8 影响大）
+   - **CTC 和 LLM 用 INT8** - 节省内存，速度提升，准确率影响小
+
+### 内存占用
+
+ - **Encoder**（约 200M 参数）
+   - FP32：~800MB 内存
+   - INT8：~200MB 内存（但不推荐，准确率下降明显）
+ - **CTC Decoder**：内存占用可忽略（几十 MB）
+ - **LLM Decoder**（约 600M 参数）
+   - INT8：~600MB 内存或显存
+   - FP16：~1.2GB 内存或显存
+
+ **总内存占用**（推荐 FP32 Encoder + INT8 Decoder）：约 **1.4GB**（CPU 内存或 GPU 显存）
+
+---
+
+## 使用示例
+
+### 基础用法
+
+```python
+from fun_asr_gguf import create_asr_engine
+
+engine = create_asr_engine(
+    encoder_onnx_path="model/Fun-ASR-Nano-Encoder-Adaptor.fp32.onnx",
+    ctc_onnx_path="model/Fun-ASR-Nano-CTC.int8.onnx",
+    decoder_gguf_path="model/Fun-ASR-Nano-Decoder.q8_0.gguf",
+    tokens_path="model/tokens.txt",
+    hotwords_path="hot.txt",  # 可选
+)
+engine.initialize()
+
+# 转录音频
+result = engine.transcribe("audio.mp3")
+print(result.text)           # 识别文本
+print(result.segments)       # 带时间戳的分段
+print(result.timings)        # 各阶段耗时
 ```
 
-*   **功能**：
-    1.  提取 LLM 部分的权重，保存为 Hugging Face 标准格式（Safetensors）。
-    2.  调用 `llama.cpp` 的转换工具，将 HF 模型转换为 GGUF 格式。
-*   **输出**：`model-gguf/qwen3-0.6b-asr.gguf`
+### 指定语言和上下文
 
-### 第三步：运行推理
-
-运行脚本 `03_Inference.py`：
-
-```powershell
-python 03_Inference.py
-```
-
-*   **功能**：
-    1.  使用 ONNX Runtime 运行 Audio Encoder，从音频提取 Embedding。
-    2.  使用 `llama-cpp-python` 加载 GGUF 模型。
-    3.  通过 "Pure Embedding" 模式，将音频特征直接注入 LLM 生成文本。
-*   **配置**：可以在脚本中修改 `test_audio = './input.mp3'` 来测试不同的音频文件。
-
-推理效果，可以见 `04_Inference.ipynb` 中的输出。
-
-## 目录结构说明
-
-执行完上述步骤后，`model-gguf` 文件夹将包含完整的推理所需文件：
-
-*   `FunASR_Nano_Encoder.onnx` : 音频编码器
-*   `FunASR_Nano_Decoder_Embed.onnx` : 文本 Embedder
-*   `qwen3-0.6b-asr.gguf` : LLM 主模型
-*   `Qwen3-0.6B/` : 分词器文件 (Tokenizer)
-
-
-## 速度说明
-
-如果启用了 vulkan 编译 llama-cpp-python，跑 CPU 的版本的脚本的话，需要显示用 `$env:VK_ICD_FILENAMES="none"`  环境变量禁止 Vulkan。
-
-在 GPU 上跑，我的机器实测一次最多注入8个 embedding，限制到了注入 embedding 的速度，似乎是 ubatch 有限，但这是当前版本的 llama-cpp-python 的限制，实际上 llama.cpp 跑到 512 的 ubatch 都能跑，
-
-FP16 模型 RTX 5050 Vulkan 解码速度 `03_Inference_gpu.py`：
-```
-[*] Generating Text:
-----------------------------------------
-，星期日，欢迎收看一千零四起事件消息，请静静介绍话题。去年十月十九日，九百六十七期节目说到委内瑞拉
-问题，我们回顾一下你当时的评。
-----------------------------------------
-[*] Generation Speed: 134.18 tokens/s
-```
-
-FP16 模型 CPU 解码速度 `03_Inference_cpu.py`：
-```
-=== 推理切片 [0:160000] ===
-Final Input Shape: (155, 1024)
-2026-01-20 08:37:04,333 - INFO - 注入 Total Embeddings Shape: (155, 1024)
-2026-01-20 08:37:04,363 - INFO - 正在注入融合 Embedding...
-init: embeddings required but some input tokens were not marked as outputs -> overriding
-2026-01-20 08:37:05,293 - INFO - 开始生成文本 (最大 1024 tokens)...
-
-，星期日，欢迎收看一千零四期誓言消息，请静静介绍话题。去年十月十九日，九百六十七期节目说到委内瑞拉
-问题，我们回顾一下你当时的评。
-
-
-2026-01-20 08:37:06,647 - INFO - 解码速度: 33.27 tokens/s (45 tokens in 1.35s)
+```python
+result = engine.transcribe(
+    "audio.mp3",
+    language="中文",        # None=自动检测, "中文", "英文", "日文" 等
+    context="这是技术会议讨论深度学习"  # 上下文信息可以提高准确率
+)
 ```
 
 
-INT8 模型 CPU 解码速度 `03_Inference_cpu_int8.py`：
+### 热词配置
+
+创建 `hot.txt` 文件：
+
 ```
-=== 推理切片 [0:160000] ===
-Final Input Shape: (155, 1024)
-2026-01-20 08:44:50,934 - INFO - 注入 Total Embeddings Shape: (155, 1024)
-2026-01-20 08:44:50,954 - INFO - 正在注入融合 Embedding...
-init: embeddings required but some input tokens were not marked as outputs -> overriding
-2026-01-20 08:44:51,937 - INFO - 开始生成文本 (最大 1024 tokens)...
-
-，星期日，欢迎收看一千零四期誓言消息，请静静介绍话题。去年十月十九日，九百六十七期节目说到委内瑞拉
-问题，我们回顾一下你当时的评。
-
-
-2026-01-20 08:44:52,792 - INFO - 解码速度: 52.64 tokens/s (45 tokens in 0.85s)
+督工
+静静
+深度学习
+神经网络
 ```
+
+热词可以有几千条、上万条，识别时只会通过 CTC Decoder 的粗结果，通过音素匹配，得到相似度0.6以上的前十条，作为上下文提供给 LLM Decoder
+
+---
+
+## 性能参考
+
+以下是在小新Pro16GT（U9-258H + RTX5050）笔记本上的效果，60秒的睡前消息音频，转录用时4.24秒，如果关闭 CTC Decoder 还能再减少1.1秒。
+
+需要注意的是，**LLM Decoder 所需时间取决于吐出文字的数量，不适合用 RTF 描述**，睡前消息音频的文字密度非常高，短短60秒就有350个字，但这段音频的速度可以作为下限参考，即 RTF 最慢也不会慢过 0.07
+
+在文字密度更低的音频上，识别速度还能更快。
+
+```
+======================================================================
+处理音频: input.mp3
+======================================================================
+
+[1] 加载音频...
+    音频长度: 60.00s
+
+[2] 音频编码...
+    耗时: 1045.35ms
+
+[3] CTC 解码...
+    CTC: 大家好二零二六年一月十一日星期日欢迎收看一千零四起事间消息请静静介绍话题去年十月十九日九百六十七期节目说到韦内瑞拉问题我们回顾一下你当时的评论无论是从集节的兵力来看还这种动机来看特朗普政府并不打算对韦伦瑞拉政权发动全面的进攻最多是发动象征性的轰炸进行政投击在诺贝尔和平鸟发给了韦内瑞拉反对派之后美国军队进攻的概率进一步降低现在美国突袭韦内瑞拉抓走了总统马杜罗杜工你怎么看待两个月之前的判断当初的判断不变美国对于韦内瑞拉的突袭性质依然是政治投击不能算是地面战争入侵的美国军队总数是以两百站在韦伦瑞拉领土上的时间不超过一个小时算是地面战争或者全面进攻实在有点勉强当然美国动用总力量并不小一五十架先进飞机加上经年累月不止的情报网络这放在东亚或者欧洲也不是一支很小的力量用到美国的西半球主场压倒韦伦瑞拉的军队那是必然的
+    热词: ['睡前消息', '督工']
+    耗时: 1137.08ms
+
+[4] 准备 Prompt...
+    Prefix: 72 tokens
+    Suffix: 5 tokens
+
+[5] LLM 解码...
+======================================================================
+大家好，2026年1月11日星期日，欢迎收看1004期《睡前消息》。请静静介绍话题。去年10月19日967期节目说到委内瑞拉问题，我们回顾一下你当时的评论。无论是从集结的兵力来看，还是从动机来看，特朗普政府并不打算对委内瑞拉政权发动全面的进攻，最多是发动象征性的轰炸进行政治投机。在诺贝尔和平奖发给了委内瑞拉反对派之后，美国军队进攻的概率进一步降低。现在美国突袭委内瑞拉，抓走了总统马杜罗。杜工，你怎么看待两个月之前的判断？当初的判断不变，美国对于委内瑞拉的突袭性质依然是政治投机，不能算是地面战争。入侵的美国军队总数是以200占在委内瑞拉领土上的时间不超过一个小时，算是地面战争或者全面进攻，实在有点勉强。当然，美国动用总力量并不小，150架先进飞机，加上经年累月部署的情报网络，这放在东亚或者欧洲也不是一只很小的力量，用到美国的西半球主场压倒委内瑞拉的军队那是必然的。
+======================================================================
+
+[6] 时间戳对齐
+    对齐耗时: 123.95ms
+    对齐结果 (前10个字符):
+      1.23s: 大
+      1.35s: 家
+      1.47s: 好
+      1.62s: ，
+      1.77s: 2
+      1.89s: 0
+      2.01s: 2
+      2.13s: 6
+      2.25s: 年
+      2.43s: 1
+      ...
+
+[统计]
+  音频长度:  60.00s
+  Decoder输入:    631 tokens/s (总: 203, prefix:72, audio:126, suffix:5)
+  Decoder输出:    212 tokens/s (总: 256)
+
+[转录耗时]
+  - 音频编码：  1045ms
+  - CTC解码：   1137ms
+  - LLM读取：    322ms
+  - LLM生成：   1205ms
+  - 时间戳对齐:  126ms
+  - 总耗时：    4.24s
+```
+
+同一段音频，纯 CPU 推理速度：
+
+```
+[统计]
+  音频长度:  60.00s
+  Decoder输入:    322 tokens/s (总: 203, prefix:72, audio:126, suffix:5)
+  Decoder输出:     48 tokens/s (总: 255)
+
+[转录耗时]
+  - 音频编码：  1121ms
+  - CTC解码：   1295ms
+  - LLM读取：    631ms
+  - LLM生成：   5264ms
+  - 时间戳对齐:  191ms
+  - 总耗时：    8.79s
+```
+
+---
+
+## 常见问题
+
+### Q: Encoder 为什么不用 INT8？
+
+A: 测试发现 Encoder 用 INT8 会有可观察到的准确率下降，建议保持 FP32，延迟上也就差个100毫秒左右。
+
+### Q: 如何选择量化级别？
+
+A:
+- **Encoder**：尽量 FP32，保证精度
+- **CTC Decoder 和 LLM Decoder**：推荐 Q8_0（INT8），速度快且准确率影响小
+
+### Q: 支持哪些语言？
+
+A: Fun-ASR-Nano-2512 支持中文、英文、日文。Fun-ASR-MLT-Nano-2512 还支持更多语言（粤语、韩文、越南语等）。
+
+### Q: 如何提高识别准确率？
+
+A:
+1. 使用 `context` 参数提供上下文信息
+2. 配置 `hot.txt` 添加领域热词
+3. 指定正确的 `language` 参数
+
+---
+
+## 文件说明
+
+### 核心文件
+
+- `01-Export-Encoder-Adaptor-CTC.py` - 导出 Encoder 和 CTC Decoder
+- `02-Export-Decoder-GGUF.py` - 导出 LLM Decoder
+- `03-Inference.py` - 完整的使用示例
+- `fun_asr_gguf/` - 核心推理引擎
+
+### 导出的模型
+
+```
+model/
+├── Fun-ASR-Nano-Encoder-Adaptor.fp32.onnx   # 音频编码器 (FP32)
+├── Fun-ASR-Nano-CTC.int8.onnx               # CTC 解码器 (INT8)
+├── Fun-ASR-Nano-Decoder.q8_0.gguf           # LLM 解码器 (INT8)
+└── tokens.txt                               # CTC Token 映射
+```
+
+---
+
+## 技术细节
+
+### 架构设计
+
+- **Encoder**：ONNX 格式，FP32，提取音频特征
+- **CTC Decoder**：ONNX 格式，INT8 量化，用于时间戳和热词候选
+- **LLM Decoder**：GGUF 格式，INT8 量化，llama.cpp 推理
+
+
+---
+
+## 致谢
+
+- [Fun-ASR](https://github.com/FunAudioLLM/Fun-ASR) - 原始模型
+- [llama.cpp](https://github.com/ggml-org/llama.cpp) - GGUF 推理引擎
