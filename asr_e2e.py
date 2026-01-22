@@ -41,11 +41,11 @@ setup_ffmpeg()
 # =========================================================================
 # Vulkan 选项
 # =========================================================================
-os.environ["VK_ICD_FILENAMES"] = "none"  # 禁止 Vulkan
-os.environ["GGML_VK_VISIBLE_DEVICES"] = "0"  # 禁止 Vulkan 用独显（强制用集显）
-os.environ["GGML_VK_DISABLE_F16"] = (
-    "1"  # 禁止 VulkanFP16 计算（Intel集显fp16有溢出问题）
-)
+# os.environ["VK_ICD_FILENAMES"] = "none"  # 禁止 Vulkan
+# os.environ["GGML_VK_VISIBLE_DEVICES"] = "0"  # 禁止 Vulkan 用独显（强制用集显）
+# os.environ["GGML_VK_DISABLE_F16"] = (
+#     "1"  # 禁止 VulkanFP16 计算（Intel集显fp16有溢出问题）
+# )
 
 # =========================================================================
 
@@ -57,8 +57,8 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # 模型路径
 MODEL_DIR = os.path.join(SCRIPT_DIR, "model-gguf")
-ENCODER_ONNX_PATH = os.path.join(MODEL_DIR, "Fun-ASR-Nano-Encoder-Adaptor.int8.onnx")
-CTC_ONNX_PATH = os.path.join(MODEL_DIR, "Fun-ASR-Nano-CTC.int8.onnx")
+ENCODER_ONNX_PATH = os.path.join(MODEL_DIR, "Fun-ASR-Nano-Encoder-Adaptor.fp32.onnx")
+CTC_ONNX_PATH = os.path.join(MODEL_DIR, "Fun-ASR-Nano-CTC.fp32.onnx")
 DECODER_GGUF_PATH = os.path.join(MODEL_DIR, "Fun-ASR-Nano-Decoder.q8_0.gguf")
 TOKENS_PATH = os.path.join(MODEL_DIR, "tokens.txt")
 
@@ -69,12 +69,13 @@ GGML_DLL_PATH = os.path.join(BIN_DIR, "ggml.dll")
 LLAMA_DLL_PATH = os.path.join(BIN_DIR, "llama.dll")
 GGML_BASE_DLL_PATH = os.path.join(BIN_DIR, "ggml-base.dll")
 
-# 输入音频
-INPUT_AUDIO = os.path.join(SCRIPT_DIR, "input.mp3")
+# 音频目录
+AUDIO_DIR = os.path.join(SCRIPT_DIR, "test_wavs")
 
 # ASR Prompts
 # 默认热词表（在本例中用于简单匹配）
-DEFAULT_HOTWORDS = ["Claude Code", "Antigravity", "SenseVoice", "FunASR"]
+# DEFAULT_HOTWORDS = ["Claude Code", "Antigravity", "SenseVoice", "FunASR"]
+DEFAULT_HOTWORDS = []
 STOP_TOKENS = [151643, 151645]
 
 # 音频参数
@@ -707,7 +708,7 @@ def prepare_prompt_embeddings(vocab, embedding_table, matched_hotwords=None):
 
     if matched_hotwords:
         hotwords = ", ".join(matched_hotwords)
-        PREFIX_PROMPT += f"请结合上下文信息，更加准确地完成语音转写任务。如果没有相关信息，我们会留空。\n\n\n**上下文信息：**\n\n\n"
+        PREFIX_PROMPT += "请结合上下文信息，更加准确地完成语音转写任务。如果没有相关信息，我们会留空。\n\n\n**上下文信息：**\n\n\n"
         PREFIX_PROMPT += f"热词列表：[{hotwords}]\n"
 
     PREFIX_PROMPT += "\n语音转写：\n"
@@ -829,7 +830,16 @@ def run_generation(ctx, vocab, eos_token, n_input_tokens):
     return generated_text, tokens_generated, t_cost
 
 
-def single_run(ort_session, model, vocab, eos_token, embedding_table, audio_path):
+def single_run(
+    ort_session,
+    ctc_session,
+    model,
+    vocab,
+    eos_token,
+    embedding_table,
+    ctc_id2token,
+    audio_path,
+):
     """单次运行ASR处理，返回处理时间和音频长度用于计算RTF"""
     # 4. 准备提示词 (Prompts)
     prefix_embd, suffix_embd, n_prefix, n_suffix = prepare_prompt_embeddings(
@@ -839,9 +849,21 @@ def single_run(ort_session, model, vocab, eos_token, embedding_table, audio_path
         return None
 
     # 5. 处理音频
-    audio_embd, audio_len, t_encode_audio = process_audio_file(audio_path, ort_session)
+    audio_embd, enc_output, audio_len, t_encode_audio = process_audio_file(
+        audio_path, ort_session
+    )
     if np.isnan(audio_embd).any():
         print("    [WARNING] Audio embedding contains NaN!")
+
+    # CTC 解码 - 需要使用 enc_output
+    matched_hws, t_ctc_cost = run_ctc_pass(
+        ctc_session, enc_output, ctc_id2token, DEFAULT_HOTWORDS
+    )
+
+    # 准备提示词（如果需要热词）
+    prefix_embd, suffix_embd, n_prefix, n_suffix = prepare_prompt_embeddings(
+        vocab, embedding_table, matched_hws
+    )
 
     # 6. 拼接 (Concatenate)
     print("\n[6] 拼接 embeddings [prefix + audio + suffix]...")
@@ -862,8 +884,8 @@ def single_run(ort_session, model, vocab, eos_token, embedding_table, audio_path
     # 清理 (Cleanup)
     llama_free(ctx)
 
-    # 计算总处理时间
-    total_processing_time = t_encode_audio + t_inject + t_gen
+    # 计算总处理时间 - 包括CTC处理时间
+    total_processing_time = t_encode_audio + t_ctc_cost + t_inject + t_gen
     audio_duration = audio_len / SAMPLE_RATE  # 音频时长（秒）
     rtf = total_processing_time / audio_duration if audio_duration > 0 else float("inf")
 
@@ -906,7 +928,7 @@ def get_audio_files(directory):
 
 def main():
     print("=" * 70)
-    print("SenseVoice Hybrid ASR 推理 (CTC + LLM)")
+    print("SenseVoice Hybrid ASR 推理 (CTC + LLM) - 批量处理模式")
     print("=" * 70)
 
     if QUIET_MODE:
@@ -933,61 +955,75 @@ def main():
     print("模型加载完成，准备处理音频...")
     print("=" * 70)
 
-    # 音频编码
-    audio_embd, enc_output, audio_len, t_encode_audio = process_audio_file(
-        INPUT_AUDIO, encoder_sess
-    )
+    # 获取 test_wavs 目录下所有音频文件
+    audio_files = get_audio_files(AUDIO_DIR)
 
-    # CTC 解码
-    matched_hws, t_ctc_cost = run_ctc_pass(
-        ctc_sess, enc_output, ctc_id2token, DEFAULT_HOTWORDS
-    )
-
-    # 准备提示词
-    prefix_embd, suffix_embd, n_prefix, n_suffix = prepare_prompt_embeddings(
-        vocab, embedding_table, matched_hws
-    )
-
-    # 拼接 embd
-    full_embd = np.concatenate(
-        [prefix_embd, audio_embd.astype(np.float32), suffix_embd], axis=0
-    )
-    n_input_tokens = full_embd.shape[0]
-
-    # 注入 embd
-    ctx, t_inject = setup_inference_context(model, full_embd, n_input_tokens)
-    if not ctx:
+    if not audio_files:
+        print(f"[ERROR] 在 {AUDIO_DIR} 中未找到音频文件")
         return 1
 
-    # LLM 解码
-    text, n_gen, t_gen = run_generation(ctx, vocab, eos_token, n_input_tokens)
+    print(f"[INFO] 找到 {len(audio_files)} 个音频文件")
 
-    # 统计
-    tps_out = n_gen / t_gen if t_gen > 0 else 0
-    tps_in = n_input_tokens / t_inject if t_inject > 0 else 0
-    t_total = t_encode_audio + t_ctc_cost + t_inject + t_gen
+    # 批量处理音频文件并统计RTF
+    total_audio_duration = 0
+    total_processing_time = 0
+    results = []
 
-    print(f"\n[统计]")
-    print(f"  音频长度: {audio_len / SAMPLE_RATE:.2f}s")
-    print(
-        f"  Decoder输入: {tps_in:5.0f} tokens/s (all: {n_input_tokens}, prefix:{n_prefix}, audio:{audio_embd.shape[0]}, suffix:{n_suffix})"
-    )
-    print(f"  Decoder输出: {tps_out:5.0f} tokens/s (all: {n_gen})")
+    for i, audio_path in enumerate(audio_files):
+        print(
+            f"\n[{i + 1}/{len(audio_files)}] 正在处理: {os.path.basename(audio_path)}"
+        )
 
-    print(f"\n[加载耗时]")
-    print(f"  - ONNX加载： {t_load_onnx * 1000:5.0f}ms")
-    print(f"  - GGUF加载： {t_load_dec * 1000:5.0f}ms")
-    print(f"  - Embd读取： {t_load_embd * 1000:5.0f}ms")
+        # 使用 single_run 函数处理单个音频
+        result = single_run(
+            encoder_sess,
+            ctc_sess,
+            model,
+            vocab,
+            eos_token,
+            embedding_table,
+            ctc_id2token,
+            audio_path,
+        )
 
-    print(f"\n[转录耗时]")
-    print(f"  - 音频编码： {t_encode_audio * 1000:5.0f}ms")
-    print(f"  - CTC解码：  {t_ctc_cost * 1000:5.0f}ms")
-    print(f"  - LLM读取：  {t_inject * 1000:5.0f}ms")
-    print(f"  - LLM生成：  {t_gen * 1000:5.0f}ms")
-    print(f"  - 总耗时：   {t_total:5.2f}s")
+        if result:
+            results.append(result)
+            total_audio_duration += result["audio_duration"]
+            total_processing_time += result["processing_time"]
+
+            print(f"  音频时长: {result['audio_duration']:.2f}s")
+            print(f"  处理时长: {result['processing_time']:.2f}s")
+            print(f"  RTF: {result['rtf']:.2f}")
+        else:
+            print(f"  [ERROR] 处理失败: {os.path.basename(audio_path)}")
+
+    # 输出总体统计
+    if results:
+        avg_rtf = (
+            total_processing_time / total_audio_duration
+            if total_audio_duration > 0
+            else float("inf")
+        )
+        print("\n" + "=" * 70)
+        print("批量处理完成 - 统计摘要:")
+        print(f"  处理文件数: {len(results)}")
+        print(f"  总音频时长: {total_audio_duration:.2f}s")
+        print(f"  总处理时间: {total_processing_time:.2f}s")
+        print(f"  平均RTF: {avg_rtf:.2f}")
+
+        rtf_values = [r["rtf"] for r in results]
+        print(f"  RTF范围: {min(rtf_values):.2f} ~ {max(rtf_values):.2f}")
+
+        # 输出每个文件的详细统计
+        print("\n详细结果:")
+        for result in results:
+            print(
+                f"  {os.path.basename(result['audio_path'])}: RTF={result['rtf']:.2f}, "
+                f"音频时长={result['audio_duration']:.2f}s, "
+                f"处理时长={result['processing_time']:.2f}s"
+            )
 
     # 清理
-    llama_free(ctx)
     llama_model_free(model)
     llama_backend_free()
 
