@@ -17,24 +17,8 @@ from .algo_phoneme import get_phoneme_info, Phoneme
 from .rag_fast import FastRAG
 from .algo_calc import fast_substring_score, fuzzy_substring_score, fuzzy_substring_search_constrained
 
-
-# 配置日志
-try:
-    from . import logger
-except ImportError:
-    # 独立运行时的回退配置
-    LOG_DIR = Path("logs")
-    LOG_DIR.mkdir(exist_ok=True)
-    log_path = LOG_DIR / "hotword_corrector.log"
-
-    logger = logging.getLogger("HotwordCorrector")
-    logger.setLevel(logging.INFO)
-    if not logger.handlers:
-        fh = logging.FileHandler(log_path, encoding='utf-8', mode='a')
-        fh.setLevel(logging.INFO)
-        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-        fh.setFormatter(formatter)
-        logger.addHandler(fh)
+# 使用统一的 logger（从 __init__.py 导入）
+from . import logger
 
 
 class MatchResult(NamedTuple):

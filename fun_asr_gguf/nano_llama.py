@@ -140,22 +140,23 @@ def init_llama_lib():
         ggml_base = ctypes.CDLL(GGML_BASE_DLL_PATH)
         llama = ctypes.CDLL(LLAMA_DLL_PATH)
 
+        # 先设置日志回调（在加载 backend 之前）
+        LOG_CALLBACK = ctypes.CFUNCTYPE(None, ctypes.c_int, ctypes.c_char_p, ctypes.c_void_p)
+        llama_log_set = llama.llama_log_set
+        llama_log_set.argtypes = [LOG_CALLBACK, ctypes.c_void_p]
+        llama_log_set.restype = None
+
+        if QUIET_LOGS:
+            _log_callback_ref = LOG_CALLBACK(quiet_log_callback)
+            llama_log_set(_log_callback_ref, None)
+
+        # 然后再加载 backend
         ggml_backend_load_all = ggml.ggml_backend_load_all
         ggml_backend_load_all.argtypes = []
         ggml_backend_load_all.restype = None
         ggml_backend_load_all()
     finally:
         os.chdir(original_cwd)
-    
-    # Logging
-    LOG_CALLBACK = ctypes.CFUNCTYPE(None, ctypes.c_int, ctypes.c_char_p, ctypes.c_void_p)
-    llama_log_set = llama.llama_log_set
-    llama_log_set.argtypes = [LOG_CALLBACK, ctypes.c_void_p]
-    llama_log_set.restype = None
-
-    if QUIET_LOGS:
-        _log_callback_ref = LOG_CALLBACK(quiet_log_callback)
-        llama_log_set(_log_callback_ref, None)
 
     # Backend
     llama_backend_init = llama.llama_backend_init

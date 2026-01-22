@@ -39,7 +39,7 @@ except ImportError:
 # =============================================================================
 
 if HAS_NUMBA:
-    @njit(cache=True)
+    @njit(cache=False)  # 禁用缓存以避免导入路径问题
     def _fuzzy_substring_distance_numba(main_codes: np.ndarray, sub_codes: np.ndarray) -> float:
         """
         Numba 加速的模糊子串距离计算
@@ -325,7 +325,7 @@ class FastRAG:
 
 if __name__ == "__main__":
     import random
-    from util.hotword.algo_phoneme import get_phoneme_seq
+    from .algo_phoneme import get_phoneme_seq
     
     logging.basicConfig(level=logging.INFO)
     

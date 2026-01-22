@@ -22,8 +22,8 @@ OUTPUT_TOKENIZER_DIR = './model/Qwen3-0.6B'
 OUTPUT_GGUF_FILE_FP16 = './model/Fun-ASR-Nano-Decoder.fp16.gguf'
 OUTPUT_GGUF_FILE_INT8 = './model/Fun-ASR-Nano-Decoder.q8_0.gguf'
 
-# 转换脚本路径 (使用 lib 目录下的 convert_hf_to_gguf.py)
-CONVERT_SCRIPT = './lib/convert_hf_to_gguf.py'
+# 转换脚本路径 (使用 fun_asr_gguf 目录下的 convert_hf_to_gguf.py)
+CONVERT_SCRIPT = './fun_asr_gguf/convert_hf_to_gguf.py'
 
 
 def main():
