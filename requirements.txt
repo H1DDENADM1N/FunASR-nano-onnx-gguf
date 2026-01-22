@@ -1,0 +1,9 @@
+torch 
+torchaudio 
+transformers 
+numpy 
+onnx
+onnxruntime 
+gguf
+funasr
+pydub
