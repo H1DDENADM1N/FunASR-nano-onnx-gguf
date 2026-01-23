@@ -22,13 +22,22 @@
 导出模型需要：
 
 ```bash
-pip install torch torchaudio transformers onnxruntime modelscope
+uv sync  # 先排除其他 group 干扰
+uv sync --group gpu --group export-model
+
+
+# pip install torch torchaudio transformers onnxruntime modelscope sentencepiece
 ```
 
 推理需要：
 
 ```bash
-pip install onnx onnxruntime numpy pydub gguf
+uv sync  # 先排除其他 group 干扰
+uv sync --group gpu  # onnxruntime-gpu
+# uv sync --group cpu  # onnxruntime
+
+
+# pip install onnx onnxruntime numpy pydub gguf pypinyin watchdog
 ```
 
 >  `pydub` 用于音频格式转换，需要系统安装 [ffmpeg](https://ffmpeg.org/download.html)
@@ -47,7 +56,9 @@ pip install onnx onnxruntime numpy pydub gguf
 下载原始模型
 
 ```bash
-pip install modelscope
+uv sync  # 先排除其他 group 干扰
+uv sync --group gpu --group export-model
+# pip install modelscope
 modelscope download --model FunAudioLLM/Fun-ASR-Nano-2512 --local_dir ./Fun-ASR-Nano-2512
 ```
 
@@ -55,10 +66,12 @@ modelscope download --model FunAudioLLM/Fun-ASR-Nano-2512 --local_dir ./Fun-ASR-
 
 ```bash
 # 导出 Encoder (FP32) + CTC Decoder (INT8)
-python 01-Export-Encoder-Adaptor-CTC.py
+uv run 01-Export-Encoder-Adaptor-CTC.py
+# python 01-Export-Encoder-Adaptor-CTC.py
 
 # 导出 LLM Decoder (INT8)
-python 02-Export-Decoder-GGUF.py
+uv run 02-Export-Decoder-GGUF.py
+# python 02-Export-Decoder-GGUF.py
 ```
 
 ### 3. 运行识别
@@ -263,6 +276,73 @@ result = engine.transcribe(
   - LLM生成：   5264ms
   - 时间戳对齐:  191ms
   - 总耗时：    8.79s
+```
+
+
+---
+## 性能参考 2
+以下是在 Redmi Book Pro 14 2022 (AMD Ryzen 7 6800H with Radeon Graphics) 笔记本上的效果，60秒的睡前消息音频，GPU 转录用时约 5.85 秒，CPU 转录用时约 9.29 秒。
+需要注意的是，**LLM Decoder 所需时间取决于吐出文字的数量，不适合用 RTF 描述**，睡前消息音频的文字密度非常高，短短60秒就有252个字，但这段音频的速度可以作为下限参考，即 RTF 最慢也不会慢过 0.15。
+在文字密度更低的音频上，识别速度还能更快。
+### GPU 推理速度 (AMD Radeon Graphics Rembrandt)
+```
+======================================================================
+处理音频: input.mp3
+======================================================================
+[1] 加载音频...
+    音频长度: 60.00s
+[2] 音频编码...
+    耗时: 1592ms
+[3] CTC 解码...
+    CTC: 大家好二零二六年一月十一日星期日欢迎收看一千零四起事间消息请静静介绍话题去年十月十九日九百六十七期节目说到韦内瑞拉问题我们回顾一下你当时的评论无论是从集节的 兵力来看还这种动机来看特朗普政府并不打算对韦伦瑞拉政权发动全面的进攻最多是发动象征性的轰炸进行政投击在诺贝尔和平鸟发给了韦内瑞拉反对派之后美国军队进攻的概率进一步降低现在美国突袭韦内瑞拉抓走了总统马杜罗杜工你怎么看待两个月之前的判断当初的判断不变美国对于韦内瑞拉的突袭性质依然是政治投击不能算是地面战争入侵的美国军队总数是以两百站在韦伦瑞拉领土上的时间不超过一个小时算是地面战争或者全面进攻实在有点勉强当然美国动用总力量并不小一五十架先进飞机加上经年累月不止的情报网络这放在东亚或者欧洲也不是一支很小的力量用到美国的西半球主场压倒韦伦瑞拉的军队那是必然的
+    热词: ['睡前消息', '督工']
+    耗时: 237ms
+[4] 准备 Prompt...
+    Prefix: 72 tokens
+    Suffix: 5 tokens
+[5] LLM 解码...
+======================================================================
+大家好，2026年1月11日星期日，欢迎收看1004期《睡前消息》。请静静介绍话题。去年10月19日967期节目说到委内瑞拉问题，我们回顾一下你当时的评论。无论是从集结的兵力来看，还是从动机来看，特朗普政府并不打算对委内瑞拉政权发动全面的进攻，最多是发动象征性的轰炸进行政治投机。在诺贝尔和平奖发给了委内瑞拉反对派之后，美国军队进攻的概率进一步降低。现在美国突袭委内瑞拉，抓走了总统马杜罗。杜工，你怎么看待两个月之前的判断？当初的判断不变，美国对于委内瑞拉的突袭性质依然是政治投机，不能算是地面战争。入侵的美国军队总数是以200占在委内瑞拉领土上的时间不超过一个小时，算是地面战争或者全面进攻，实在有点勉强。当然，美国动用总力量并不小，150架先进飞机加上经年累月部署的情报网络，这放在东亚或者欧洲也不是一只很小的力量，用到美国的西半球主场压倒委内瑞拉的军队那是必然的。
+======================================================================
+[6] 时间戳对齐
+    对齐耗时: 165ms
+    对齐结果 (前10个字符):
+      1.23s: 大
+      1.35s: 家
+      1.47s: 好
+      1.62s: ，
+      1.77s: 2
+      1.89s: 0
+      2.01s: 2
+      2.13s: 6
+      2.25s: 年
+      2.43s: 1
+      ...
+[统计]
+  音频长度:  60.00s
+  Decoder输入:  10370 tokens/s (总: 203, prefix:72, audio:126, suffix:5)
+  Decoder输出:     69 tokens/s (总: 255)
+[转录耗时]
+  - 音频编码：  1592ms
+  - CTC解码：    237ms
+  - LLM读取：     20ms
+  - LLM生成：   3683ms
+  - 时间戳对齐:  167ms
+  - 总耗时：    5.96s
+```
+### CPU 推理速度 (AMD Ryzen 7 6800H, 4675 MHz)
+```
+[统计]
+  音频长度:  60.00s
+  Decoder输入:    373 tokens/s (总: 204, prefix:73, audio:126, suffix:5)
+  Decoder输出:     39 tokens/s (总: 252)
+[转录耗时]
+  - 音频编码：  1628ms
+  - CTC解码：    240ms
+  - LLM读取：    546ms
+  - LLM生成：   6410ms
+  - 时间戳对齐:  240ms
+  - 总耗时：    9.29s
 ```
 
 ---
