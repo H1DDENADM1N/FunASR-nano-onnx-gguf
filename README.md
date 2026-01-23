@@ -29,13 +29,15 @@ pip install -r requirements.txt
 >  `pydub` 用于音频格式转换，需要系统安装 [ffmpeg](https://ffmpeg.org/download.html)
 
 
-从 [llama.cpp Releases](https://github.com/ggml-org/llama.cpp/releases) 下载预编译二进制文件：
+从 [llama.cpp Releases](https://github.com/ggml-org/llama.cpp/releases) 下载预编译二进制文件，将动态库放入 `fun_asr_gguf/bin/` 文件夹：
 
-- Windows: 下载 `llama-bXXXX-bin-win-vulkan-x64.zip`
+| 平台 | 下载文件 |
+|------|----------|
+| **Windows** | `llama-bXXXX-bin-win-vulkan-x64.zip` |
+| **Linux** | `llama-bXXXX-bin-ubuntu-x64.zip` |
+| **macOS** | `llama-bXXXX-bin-macos-arm64.zip` | 
 
-将解压得到的所有 `.dll` 文件放入 `fun_asr_gguf/bin/` 文件夹
-
-> MacOS 和 Linux 也有对应的预编译文件，但我没有做测试
+> Linux 和 macOS 尚未经过完整测试，欢迎反馈
 
 ### 2. 下载模型（可选，如已有导出模型可跳过）
 
