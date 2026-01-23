@@ -3,14 +3,47 @@ ASR 演示脚本 - 简单直接的使用示例
 """
 
 import os
+
 from fun_asr_gguf import create_asr_engine
+
+
+# =========================================================================
+# 设置 FFmpeg 路径
+# =========================================================================
+def setup_ffmpeg():
+    """设置 FFmpeg 路径和配置"""
+    ffmpeg_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ffmpeg")
+    if os.path.exists(ffmpeg_dir):
+        os.environ["PATH"] = ffmpeg_dir + os.pathsep + os.environ["PATH"]
+
+        # 导入并配置 pydub
+        from pydub import AudioSegment
+
+        if os.name == "nt":  # Windows
+            AudioSegment.converter = os.path.join(ffmpeg_dir, "ffmpeg.exe")
+            AudioSegment.ffmpeg = os.path.join(ffmpeg_dir, "ffmpeg.exe")
+        else:  # Linux/MacOS
+            AudioSegment.converter = os.path.join(ffmpeg_dir, "ffmpeg")
+            AudioSegment.ffmpeg = os.path.join(ffmpeg_dir, "ffmpeg")
+
+        print(f"[INFO] FFmpeg 已配置: {ffmpeg_dir}")
+        return True
+    else:
+        print(f"[WARNING] FFmpeg 目录不存在: {ffmpeg_dir}")
+        return False
+
+
+# 执行 FFmpeg 设置
+setup_ffmpeg()
 
 
 # ==================== Vulkan 选项 ====================
 
-# os.environ["VK_ICD_FILENAMES"] = "none"       # 禁止 Vulkan
-# os.environ["GGML_VK_VISIBLE_DEVICES"] = "0"   # 禁止 Vulkan 用独显（强制用集显）
-# os.environ["GGML_VK_DISABLE_F16"] = "1"       # 禁止 VulkanFP16 计算（Intel集显fp16有溢出问题）
+os.environ["VK_ICD_FILENAMES"] = "none"  # 禁止 Vulkan
+os.environ["GGML_VK_VISIBLE_DEVICES"] = "0"  # 禁止 Vulkan 用独显（强制用集显）
+os.environ["GGML_VK_DISABLE_F16"] = (
+    "1"  # 禁止 VulkanFP16 计算（Intel集显fp16有溢出问题）
+)
 
 
 # ==================== 配置区域 ====================
@@ -56,11 +89,11 @@ Fun-ASR-MLT-Nano-2512
 
 # ==================== 执行区域 ====================
 
-def main():
 
-    print("="*70)
+def main():
+    print("=" * 70)
     print("ASR 语音识别")
-    print("="*70)
+    print("=" * 70)
 
     # 创建 ASR 引擎
     engine = create_asr_engine(
@@ -75,26 +108,21 @@ def main():
 
     # 转录音频
     result = engine.transcribe(
-        audio_file, 
-        language=language, 
-        context=context, 
-        verbose=verbose
+        audio_file, language=language, context=context, verbose=verbose
     )
 
-    input('回车继续')
+    input("回车继续")
     result = engine.transcribe(
-        audio_file, 
-        language=language, 
-        context=context, 
-        verbose=verbose
+        audio_file, language=language, context=context, verbose=verbose
     )
 
     # 输出结果
     if json_output:
         import json
-        print("\n" + "="*70)
+
+        print("\n" + "=" * 70)
         print("识别结果 (JSON)")
-        print("="*70)
+        print("=" * 70)
         print(json.dumps(result, ensure_ascii=False, indent=2))
 
     # 清理资源
