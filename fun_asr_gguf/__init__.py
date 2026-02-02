@@ -33,7 +33,7 @@ def setup_logging(level: int = logging.WARNING, log_file: str = os.path.join("lo
         if log_dir:
             os.makedirs(log_dir, exist_ok=True)
             
-        file_handler = logging.FileHandler(log_file, encoding='utf-8')
+        file_handler = logging.FileHandler(log_file, mode='w', encoding='utf-8')
         file_handler.setLevel(logging.DEBUG) # 文件通常记录更详细的信息
         file_formatter = logging.Formatter(
             fmt='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
