@@ -73,10 +73,11 @@ class MultiHeadedAttentionSANM(nn.Module):
 
     def forward_attention(self, v_h, scores, mask):
         if mask is not None:
-            # Score Masking: (B, 1, 1, T_key)
-            m = mask.unsqueeze(1).unsqueeze(2).eq(0)
-            scores = scores.masked_fill(m, -float("inf"))
-            attn = torch.softmax(scores, dim=-1).masked_fill(m, 0.0)
+            # Optimized Additive Masking for DirectML:
+            # (mask - 1.0) * 10000 creates a matrix where valid is 0 and padding is -10000
+            m_addon = (mask - 1.0).unsqueeze(1).unsqueeze(2) * 10000.0
+            scores = scores + m_addon
+            attn = torch.softmax(scores, dim=-1)
         else:
             attn = torch.softmax(scores, dim=-1)
         x = torch.matmul(self.dropout(attn), v_h).permute(0, 2, 1, 3).flatten(2)
@@ -135,10 +136,17 @@ class MultiHeadedAttention(nn.Module):
         v = self.linear_v(value).unflatten(-1, (self.h, self.d_k)).transpose(1, 2)
         scores = torch.matmul(q * (self.d_k ** -0.5), k.transpose(-2, -1))
         
+    def forward(self, query, key, value, mask):
+        q = self.linear_q(query).unflatten(-1, (self.h, self.d_k)).transpose(1, 2)
+        k = self.linear_k(key).unflatten(-1, (self.h, self.d_k)).transpose(1, 2)
+        v = self.linear_v(value).unflatten(-1, (self.h, self.d_k)).transpose(1, 2)
+        scores = torch.matmul(q * (self.d_k ** -0.5), k.transpose(-2, -1))
+        
         if mask is not None:
-            m = mask.unsqueeze(1).unsqueeze(2).eq(0)
-            scores = scores.masked_fill(m, -float("inf"))
-            attn = torch.softmax(scores, dim=-1).masked_fill(m, 0.0)
+            # Optimized Additive Masking for DirectML
+            m_addon = (mask - 1.0).unsqueeze(1).unsqueeze(2) * 10000.0
+            scores = scores + m_addon
+            attn = torch.softmax(scores, dim=-1)
         else:
             attn = torch.softmax(scores, dim=-1)
             

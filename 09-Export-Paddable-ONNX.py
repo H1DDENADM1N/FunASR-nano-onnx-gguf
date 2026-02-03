@@ -58,7 +58,7 @@ def export_paddable_onnx():
             'enc_output': {1: 'enc_frames'},
             'adapt_output': {1: 'adapt_frames'}
         },
-        opset_version=17,
+        opset_version=18,
         do_constant_folding=True
     )
 
