@@ -50,20 +50,29 @@ def verify_final_consistency():
         _, output_30s = wrapper(audio_30s, ilens_30s)
 
     # 4. Compare
-    print("\n--- Numerical Analysis (Final Output) ---")
+    print("\n--- Numerical Analysis (Final Output Valid Region) ---")
     
-    diff = torch.abs(output_5s - output_30s)
+    # Calculate target length (from model logic)
+    T_mel_valid = (s5_samples // 160) + 1
+    T_lfr_valid = (T_mel_valid + 6 - 1) // 6
+    olens_1 = 1 + (T_lfr_valid - 3 + 2) // 2
+    target_len = (1 + (olens_1 - 3 + 2) // 2 - 1) // 2 + 1
+    
+    # Slice to valid region for comparison
+    output_5s_valid = output_5s[:, :target_len, :]
+    output_30s_valid = output_30s[:, :target_len, :]
+    
+    diff = torch.abs(output_5s_valid - output_30s_valid)
     max_err = diff.max().item()
     mean_err = diff.mean().item()
     
     # Cosine Similarity
-    # Flatten to (N, Dim) to calculate per-frame similarity, then mean
     cos = torch.nn.CosineSimilarity(dim=-1)
-    sim = cos(output_5s, output_30s).mean().item()
+    sim = cos(output_5s_valid, output_30s_valid).mean().item()
     
-    # Check shape consistency
-    print(f"  Shape 5s:  {list(output_5s.shape)}")
-    print(f"  Shape 30s: {list(output_30s.shape)}")
+    print(f"  Valid length: {target_len}")
+    print(f"  Shape 5s (Physical):  {list(output_5s.shape)}")
+    print(f"  Shape 30s (Physical): {list(output_30s.shape)}")
     
     print(f"  Max Absolute Error: {max_err:.6e}")
     print(f"  Mean Absolute Error: {mean_err:.6e}")

@@ -25,11 +25,11 @@ class SinusoidalPositionEncoder(nn.Module):
 
     def forward(self, x, mask=None):
         batch_size, timesteps, input_dim = x.size()
-        positions = torch.arange(1, timesteps + 1, device=x.device)[None, :]
+        # Shape Inheritance: Create indices (1, 2, ..., T) without using arange.view/unsqueeze
+        # This creates (B, T) indices directly
+        positions = torch.ones_like(x[:, :, 0], dtype=torch.long).cumsum(1)
         position_encoding = self.encode(positions, input_dim, x.dtype).to(x.device)
         x = x + position_encoding
-        if mask is not None:
-            x = x * mask.unsqueeze(-1)
         return x
 
 class PositionwiseFeedForward(nn.Module):
@@ -64,11 +64,11 @@ class MultiHeadedAttentionSANM(nn.Module):
         self.pad_fn = nn.ConstantPad1d(((kernel_size - 1) // 2, kernel_size - 1 - (kernel_size - 1) // 2), 0.0)
 
     def forward_fsmn(self, inputs, mask):
+        # Fire-wall: Ensure padding is absolute zero BEFORE sliding window convolution
         if mask is not None: inputs = inputs * mask.unsqueeze(-1)
         x = self.pad_fn(inputs.transpose(1, 2))
         x = self.fsmn_block(x).transpose(1, 2)
         x = self.dropout(x + inputs)
-        if mask is not None: x = x * mask.unsqueeze(-1)
         return x
 
     def forward_attention(self, v_h, scores, mask):
@@ -94,7 +94,6 @@ class MultiHeadedAttentionSANM(nn.Module):
         att_outs = self.forward_attention(v_h, scores, mask)
         
         out = att_outs + fsmn_memory
-        if mask is not None: out = out * mask.unsqueeze(-1)
         return out
 
 class EncoderLayerSANM(nn.Module):
@@ -117,7 +116,6 @@ class EncoderLayerSANM(nn.Module):
         if self.normalize_before: x = self.norm2(x)
         x = residual + self.dropout(self.feed_forward(x))
         if not self.normalize_before: x = self.norm2(x)
-        if mask is not None: x = x * mask.unsqueeze(-1)
         return x, mask
 
 # ============================================================================
@@ -146,7 +144,6 @@ class MultiHeadedAttention(nn.Module):
             
         x = torch.matmul(self.dropout(attn), v).transpose(1, 2).flatten(2)
         out = self.linear_out(x)
-        if mask is not None: out = out * mask.unsqueeze(-1)
         return out
 
 class EncoderLayer(nn.Module):
@@ -165,7 +162,6 @@ class EncoderLayer(nn.Module):
         if self.normalize_before: x = self.norm2(x)
         x = residual + self.dropout(self.feed_forward(x))
         if not self.normalize_before: x = self.norm2(x)
-        if mask is not None: x = x * mask.unsqueeze(-1)
         return x, mask
 
 # ============================================================================
@@ -187,10 +183,10 @@ class SenseVoiceEncoderSmall(nn.Module):
         for layer in self.encoders0: x, _ = layer(x, mask)
         for layer in self.encoders:  x, _ = layer(x, mask)
         x = self.after_norm(x)
-        if mask is not None: x = x * mask.unsqueeze(-1)
+        if mask is not None: x = x * mask.unsqueeze(-1) # Final sweeping
         for layer in self.tp_encoders: x, _ = layer(x, mask)
         x = self.tp_norm(x)
-        if mask is not None: x = x * mask.unsqueeze(-1)
+        if mask is not None: x = x * mask.unsqueeze(-1) # Final sweeping
         return x
 
 class CorrectTransformerAdaptor(nn.Module):
@@ -204,7 +200,6 @@ class CorrectTransformerAdaptor(nn.Module):
         batch_size, seq_len, dim = x.size()
         chunk_num = (seq_len - 1) // self.k + 1
         x = self.linear2(self.relu(self.linear1(F.pad(x, (0, 0, 0, chunk_num * self.k - seq_len)).unflatten(1, (chunk_num, self.k)).flatten(2))))
-        if mask is not None: x = x * mask.unsqueeze(-1)
         if self.blocks is not None:
             for block in self.blocks: x, _ = block(x, mask)
         return x
@@ -263,43 +258,57 @@ class EncoderExportWrapperPaddable(nn.Module):
         self.register_buffer('pre_emphasis', torch.tensor(pre_emphasis, dtype=torch.float32).view(1, 1, -1))
 
     def forward(self, audio, ilens):
-        # 0. Initial Input
+        # 0. Initial Setup
         valid_samples = ilens[0]
+        batch, _, samples = audio.shape
+        # Create audio-domain mask symbolically without Reshape
+        # Using ones_like + cumsum generates (B, 1, T) indices directly
+        audio_indices = torch.ones_like(audio, dtype=torch.long).cumsum(-1) - 1
+        audio_mask = (audio_indices < valid_samples).float()
 
-        # 1. Length-Aware Normalization & AUDIO HARD-ZEROING
-        mean_val = torch.mean(audio[0, 0, :valid_samples])
-        audio = audio - mean_val
-        # Crucial Fix: Wipe out the background noise introduced by mean subtraction
-        audio[:, :, valid_samples:] = 0.0
+        # 1. Length-Aware Normalization (Symbolic)
+        # mean = sum / N
+        sum_val = (audio * audio_mask).sum()
+        mean_val = sum_val / valid_samples.float()
+        audio = (audio - mean_val) * audio_mask
         
-        # Pre-emphasis
+        # Pre-emphasis (Symbolic)
         if self.pre_emphasis_val > 0:
             audio = torch.cat([audio[..., :1], audio[..., 1:] - self.pre_emphasis * audio[..., :-1]], dim=-1)
-            # Re-apply hard-zeroing
-            audio[:, :, valid_samples:] = 0.0
+            audio = audio * audio_mask
             
         # 2. STFT & Mel
         real, imag = self.stft_model(audio)
         T_mel_valid = (valid_samples // 160) + 1
         mel = (torch.matmul(self.fbank, real * real + imag * imag).transpose(1, 2) + 1e-7).log()
         
-        # 3. Corrected LFR Logic with Replicate Padding
-        T_lfr_valid = (T_mel_valid + self.lfr_n - 1) // self.lfr_n
+        # 3. Corrected LFR Logic with Replicate Padding (Symbolic Gather)
         T_phys = mel.shape[1]
+        T_lfr_valid = (T_mel_valid + self.lfr_n - 1) // self.lfr_n
         T_lfr_phys = (T_phys + self.lfr_n - 1) // self.lfr_n
         
-        # --- REPLICATE STRATEGY ---
-        valid_part = mel[:, :T_mel_valid, :]
-        last_frame = mel[:, [T_mel_valid - 1]]
-        padding_fill = last_frame.repeat(1, T_phys - T_mel_valid, 1)
-        mel_consistent = torch.cat([valid_part, padding_fill], dim=1)
+        # --- REPLICATE STRATEGY (Symbolic version) ---
+        # Instead of slicing, we use gather to replicate the last valid frame
+        # mel is (B, T, D), mel[..., :1] is (B, T, 1)
+        mel_indices = torch.ones_like(mel[..., :1], dtype=torch.long).cumsum(1) - 1
+        # Clamping indices to max T_mel_valid - 1 effectively replicates the last valid frame
+        gather_idx = torch.clamp(mel_indices, max=T_mel_valid - 1).expand(-1, -1, 80)
+        mel_consistent = torch.gather(mel, 1, gather_idx)
         
-        left_pad = mel_consistent[:, [0]].repeat(1, (self.lfr_m - 1) // 2, 1)
-        right_pad = last_frame.repeat(1, (T_lfr_phys * self.lfr_n + self.lfr_m) - T_phys, 1)
+        # Prepare for LFR windowing
+        m_half = (self.lfr_m - 1) // 2
+        # We still need cat for context padding, but sizes are now based on constants and T_lfr_phys
+        left_pad = mel_consistent[:, [0]].repeat(1, m_half, 1)
+        # Calculate right pad size symbolically
+        right_pad_len = (T_lfr_phys * self.lfr_n + self.lfr_m) - T_phys
+        right_pad = mel_consistent[:, [T_phys - 1]].repeat(1, right_pad_len, 1)
         padded = torch.cat([left_pad, mel_consistent, right_pad], dim=1)
         
         lfr_list = []
-        for i in range(self.lfr_m): lfr_list.append(padded[:, i : i + T_lfr_phys * self.lfr_n : self.lfr_n][:, :T_lfr_phys, :])
+        for i in range(self.lfr_m):
+            # Slicing with constant step and symbolic T_lfr_phys is ONNX compatible
+            feat = padded[:, i : i + T_lfr_phys * self.lfr_n : self.lfr_n]
+            lfr_list.append(feat[:, :T_lfr_phys, :])
         x = torch.cat(lfr_list, dim=-1)
         
         # 4. Masking
@@ -310,8 +319,14 @@ class EncoderExportWrapperPaddable(nn.Module):
         enc = self.hybrid_model.audio_encoder(x, m)
         adapt = self.hybrid_model.audio_adaptor(enc, m)
         
-        # Target length calculation
+        # Target length calculation (All symbolic)
         olens_1 = 1 + (T_lfr_valid - 3 + 2) // 2
         target_len = (1 + (olens_1 - 3 + 2) // 2 - 1) // 2 + 1
         
-        return enc, adapt[:, :target_len, :]
+        # One last symbolic slice for the final output
+        # Use ones_like + cumsum to avoid arange.unsqueeze for better DML compatibility
+        output_indices = (torch.ones_like(adapt[..., :1], dtype=torch.long).cumsum(1) - 1).squeeze(-1)
+        final_mask = (output_indices < target_len).unsqueeze(-1)
+        final_output = adapt * final_mask
+        
+        return enc, final_output
