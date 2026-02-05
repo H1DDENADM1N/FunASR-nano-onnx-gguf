@@ -84,6 +84,7 @@ class Timings:
         total: 总耗时
     """
     encode: float = 0.0
+    load_audio: float = 0.0
     ctc: float = 0.0
     prepare: float = 0.0
     inject: float = 0.0
