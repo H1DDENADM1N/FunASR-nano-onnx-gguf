@@ -421,6 +421,20 @@ print(result.timings)        # 各阶段耗时
 
 ✓ 字幕已导出至: (20260124-114926)请在接下来的名词之间添加上顿号：苹果、香.srt
 ```
+
+### 按推理总计时长排序（由快到慢）
+| 排名  | 运行环境/配置                                 |  推理总计 | 音频编码 | CTC解码 | LLM读取 | LLM生成 | 主要耗时瓶颈 |
+| :---: | :-------------------------------------------- | --------: | -------: | ------: | ------: | ------: | :----------- |
+|   🥇   | **onnxruntime-gpu**<br>启用 Vulkan GPU        | **0.56s** |    162ms |    27ms |    40ms |   331ms | LLM生成      |
+|   🥈   | **onnxruntime-directml**<br>禁用 DirectML GPU | **0.57s** |    141ms |    27ms |    41ms |   357ms | LLM生成      |
+|   🥉   | **onnxruntime**<br>CPU 模式                   | **0.83s** |    116ms |    22ms |   255ms |   434ms | LLM生成/读取 |
+|   4   | **onnxruntime-directml**<br>启用 DirectML GPU | **0.94s** |    528ms |   123ms |    10ms |   279ms | 音频编码     |
+|   5   | **onnxruntime-gpu**<br>禁用 Vulkan GPU        | **1.10s** |    160ms |    31ms |   371ms |   533ms | LLM生成/读取 |
+### 简要分析
+*   **最优配置**：**onnxruntime-gpu (Vulkan)** 是本次测试中表现最好的，总耗时仅 0.56s。
+*   **DirectML 的异常**：启用 DirectML GPU 后（0.94s），速度反而比禁用（0.57s）慢了近一倍，主要原因是 **音频编码** 阶段耗时激增至 528ms。
+*   **禁用 Vulkan 的后果**：在 onnxruntime-gpu 模式下禁用 Vulkan 后，LLM 读取和生成的耗时大幅增加，导致成为最慢的配置。
+> 注：DirectML 模式在短音频测试中表现不佳（0.94s），鉴于长音频测试未提供该数据，推断其可能存在集成显卡显存拷贝或初始化开销较大的问题，不适合此类转录任务。
 ---
 
 ## 常见问题
