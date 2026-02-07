@@ -21,8 +21,6 @@ class SinusoidalPositionEncoder(nn.Module):
         return encoding.type(dtype)
 
     def forward(self, x, mask=None):
-        # Shape Inheritance: Create indices (1, 2, ..., T) without using arange.view/unsqueeze
-        # This is strictly DML-safe.
         positions = torch.ones_like(x[:, :, 0], dtype=torch.long).cumsum(1)
         position_encoding = self.encode(positions, x.size(-1), x.dtype).to(x.device)
         return x + position_encoding
@@ -58,7 +56,6 @@ class MultiHeadedAttentionSANM(nn.Module):
         self.pad_fn = nn.ConstantPad1d(((kernel_size - 1) // 2, kernel_size - 1 - (kernel_size - 1) // 2), 0.0)
 
     def forward_fsmn(self, inputs, mask):
-        # Fire-wall: Ensure padding is absolute zero BEFORE sliding window convolution
         if mask is not None: inputs = inputs * mask.unsqueeze(-1)
         x = self.pad_fn(inputs.transpose(1, 2))
         x = self.fsmn_block(x).transpose(1, 2)
@@ -67,8 +64,6 @@ class MultiHeadedAttentionSANM(nn.Module):
 
     def forward_attention(self, v_h, scores, mask):
         if mask is not None:
-            # Optimized Additive Masking for DirectML:
-            # (mask - 1.0) * 10000 creates a matrix where valid is 0 and padding is -10000
             m_addon = (mask - 1.0).type(scores.dtype).unsqueeze(1).unsqueeze(2) * 10000.0
             scores = scores + m_addon
             attn = torch.softmax(scores, dim=-1)
@@ -101,14 +96,10 @@ class EncoderLayerSANM(nn.Module):
         residual = x
         if self.normalize_before: x = self.norm1(x)
         x = self.self_attn(x, mask)
-        
-        # Dimension adaptation for the first block
         if self.in_size != self.size: 
             return self.dropout(x), mask
-            
         x = residual + self.dropout(x)
         if not self.normalize_before: x = self.norm1(x)
-        
         residual = x
         if self.normalize_before: x = self.norm2(x)
         x = residual + self.dropout(self.feed_forward(x))
@@ -131,15 +122,12 @@ class MultiHeadedAttention(nn.Module):
         k = self.linear_k(key).unflatten(-1, (self.h, self.d_k)).transpose(1, 2)
         v = self.linear_v(value).unflatten(-1, (self.h, self.d_k)).transpose(1, 2)
         scores = torch.matmul(q * (self.d_k ** -0.5), k.transpose(-2, -1))
-        
         if mask is not None:
-            # Optimized Additive Masking for DirectML
             m_addon = (mask - 1.0).type(scores.dtype).unsqueeze(1).unsqueeze(2) * 10000.0
             scores = scores + m_addon
             attn = torch.softmax(scores, dim=-1)
         else:
             attn = torch.softmax(scores, dim=-1)
-            
         x = torch.matmul(self.dropout(attn), v).transpose(1, 2).flatten(2)
         out = self.linear_out(x)
         return out
@@ -188,45 +176,46 @@ class CorrectTransformerAdaptor(nn.Module):
 # Main Models
 # ============================================================================
 
-class SenseVoiceEncoderSmall(nn.Module):
+class SenseVoiceEncoderSmallDebug(nn.Module):
     def __init__(self):
         super().__init__()
         self.input_size, self.output_size, self.attention_heads, self.linear_units, self.num_blocks, self.tp_blocks, self.dropout_rate, self.attention_dropout_rate, self.kernel_size = 560, 512, 4, 2048, 50, 20, 0.1, 0.1, 11
         self.embed = SinusoidalPositionEncoder()
-        
         snm_cfg = (self.attention_heads, self.output_size, self.output_size, self.attention_dropout_rate, self.kernel_size)
         ffn_cfg = (self.output_size, self.linear_units, self.dropout_rate)
-
         self.encoders0 = nn.ModuleList([EncoderLayerSANM(560, 512, MultiHeadedAttentionSANM(4, 560, 512, 0.1, 11), PositionwiseFeedForward(*ffn_cfg), 0.1)])
         self.encoders = nn.ModuleList([EncoderLayerSANM(512, 512, MultiHeadedAttentionSANM(*snm_cfg), PositionwiseFeedForward(*ffn_cfg), 0.1) for _ in range(self.num_blocks - 1)])
+        # Mark layer 33 (index 32 because layer 0 is encoders0)
+        self.encoders[31].is_layer_33 = True
         self.tp_encoders = nn.ModuleList([EncoderLayerSANM(512, 512, MultiHeadedAttentionSANM(*snm_cfg), PositionwiseFeedForward(*ffn_cfg), 0.1) for _ in range(self.tp_blocks)])
         self.after_norm, self.tp_norm = LayerNorm(512), LayerNorm(512)
-
     def forward(self, x, mask):
         x = self.embed(x * (512**0.5), mask)
         for layer in self.encoders0: x, _ = layer(x, mask)
-        for layer in self.encoders:  x, _ = layer(x, mask)
+        enc0 = x
+        
+        # Track ALL layers to find the exact collapse point
+        debug_layers = []
+        for i, layer in enumerate(self.encoders):
+            x, _ = layer(x, mask)
+            debug_layers.append(x) # enc1 to enc49
+            
+        enc_main = x
         x = self.after_norm(x)
-        if mask is not None: x = x * mask.unsqueeze(-1) # Fire-wall Sweeping
+        if mask is not None: x = x * mask.unsqueeze(-1)
         for layer in self.tp_encoders: x, _ = layer(x, mask)
+        enc_tp = x
         x = self.tp_norm(x)
-        if mask is not None: x = x * mask.unsqueeze(-1) # Final Sweeping
-        return x
+        if mask is not None: x = x * mask.unsqueeze(-1)
+        
+        return x, enc0, *debug_layers, enc_main, enc_tp
 
-class CTC(nn.Module):
-    def __init__(self, odim, encoder_output_size):
-        super().__init__()
-        self.ctc_lo = nn.Linear(encoder_output_size, odim)
-    def forward(self, x):
-        return self.ctc_lo(x)
-
-class HybridSenseVoice(nn.Module):
+class HybridSenseVoiceDebug(nn.Module):
     def __init__(self, encoder_dim=512, llm_dim=1024, vocab_size=60515):
         super().__init__()
-        self.audio_encoder = SenseVoiceEncoderSmall()
+        self.audio_encoder = SenseVoiceEncoderSmallDebug()
         self.audio_adaptor = CorrectTransformerAdaptor(1, 512, 1024, 2048, 2)
         self.ctc_decoder = CorrectTransformerAdaptor(1, 512, 512, 2048, 5)
-        self.ctc_proj = CTC(vocab_size, 512)
         
     def load_weights(self, path):
         sd = torch.load(path, map_location="cpu")
@@ -234,12 +223,7 @@ class HybridSenseVoice(nn.Module):
         nsd = {}
         for k, v in sd.items():
             if k.startswith("audio_encoder.") or k.startswith("audio_adaptor.") or k.startswith("ctc_decoder."): nsd[k] = v
-            elif k.startswith("ctc.ctc_lo."): nsd[k.replace("ctc.ctc_lo", "ctc_proj.ctc_lo")] = v
         self.load_state_dict(nsd, strict=False)
-
-# ============================================================================
-# STFT Component
-# ============================================================================
 
 class STFT_Process(nn.Module):
     def __init__(self, n_fft=400, win_length=400, hop_len=160):
@@ -255,11 +239,7 @@ class STFT_Process(nn.Module):
         xp = F.pad(x, (self.half_n_fft, self.half_n_fft))
         return F.conv1d(xp, self.cos_kernel, stride=self.hop_len), F.conv1d(xp, self.sin_kernel, stride=self.hop_len)
 
-# ============================================================================
-# Export Wrappers
-# ============================================================================
-
-class EncoderExportWrapperPaddable(nn.Module):
+class EncoderExportWrapperDebug(nn.Module):
     def __init__(self, hybrid_model, stft_model, fbank, pre_emphasis=0.97, lfr_m=7, lfr_n=6):
         super().__init__()
         self.hybrid_model, self.stft_model, self.fbank = hybrid_model, stft_model, fbank
@@ -267,13 +247,9 @@ class EncoderExportWrapperPaddable(nn.Module):
         self.register_buffer('pre_emphasis', torch.tensor(pre_emphasis, dtype=torch.float32).view(1, 1, -1))
 
     def forward(self, audio, ilens):
-        # 0. Initial Setup
         valid_samples = ilens[0]
-        batch, _, samples = audio.shape
         audio_indices = torch.ones_like(audio, dtype=torch.long).cumsum(-1) - 1
         audio_mask = (audio_indices < valid_samples).type(audio.dtype)
-
-        # 1. Normalization (Enforce float32 for summation to avoid FP16 overflow)
         audio_mask_float = audio_mask.float()
         sum_val = (audio.float() * audio_mask_float).sum()
         mean_val = (sum_val / valid_samples).to(audio.dtype)
@@ -281,62 +257,37 @@ class EncoderExportWrapperPaddable(nn.Module):
         if self.pre_emphasis_val > 0:
             audio = torch.cat([audio[..., :1], audio[..., 1:] - self.pre_emphasis * audio[..., :-1]], dim=-1)
             audio = audio * audio_mask
-            
-        # 2. STFT & Mel (Enforce float32 for power spectrum to avoid FP16 overflow)
         real, imag = self.stft_model(audio.float() if audio.dtype == torch.float16 else audio)
         T_mel_valid = (valid_samples // 160) + 1
-        
-        # Power spectrum in FP32
         power_spec = real.pow(2) + imag.pow(2)
         mel = (torch.matmul(self.fbank.float(), power_spec).transpose(1, 2) + 1e-5).log().to(audio.dtype)
-        
-        # 3. LFR with Replicate Padding (Symbolic)
         T_phys = mel.shape[1]
         T_lfr_valid = (T_mel_valid + self.lfr_n - 1) // self.lfr_n
         T_lfr_phys = (T_phys + self.lfr_n - 1) // self.lfr_n
-        
         mel_indices = (torch.ones_like(mel[..., :1], dtype=torch.long).cumsum(1) - 1)
         gather_idx = torch.clamp(mel_indices, max=T_mel_valid - 1).expand(-1, -1, 80)
         mel_consistent = torch.gather(mel, 1, gather_idx)
-        
         m_half = (self.lfr_m - 1) // 2
         left_pad = mel_consistent[:, [0]].repeat(1, m_half, 1)
         right_pad_len = (T_lfr_phys * self.lfr_n + self.lfr_m) - T_phys
         right_pad = mel_consistent[:, [T_phys - 1]].repeat(1, right_pad_len, 1)
         padded = torch.cat([left_pad, mel_consistent, right_pad], dim=1)
-        
         lfr_list = []
         for i in range(self.lfr_m):
             feat = padded[:, i : i + T_lfr_phys * self.lfr_n : self.lfr_n]
             lfr_list.append(feat[:, :T_lfr_phys, :])
-        x = torch.cat(lfr_list, dim=-1)
+        lfr_x = torch.cat(lfr_list, dim=-1)
+        m = (torch.arange(T_lfr_phys, device=lfr_x.device).unsqueeze(0) < T_lfr_valid).type(lfr_x.dtype)
+        x = lfr_x * m.unsqueeze(-1)
         
-        # 4. Masking & Model
-        m = (torch.arange(T_lfr_phys, device=x.device).unsqueeze(0) < T_lfr_valid).type(x.dtype)
-        x = x * m.unsqueeze(-1)
+        # results: x, enc0, *debug_layers, enc_main, enc_tp
+        results = self.hybrid_model.audio_encoder(x, m)
+        enc_final = results[0]
         
-        enc = self.hybrid_model.audio_encoder(x, m)
-        adapt, _ = self.hybrid_model.audio_adaptor(enc, m)
-        
-        # 5. Length Control
+        adapt_out, _ = self.hybrid_model.audio_adaptor(enc_final, m)
         olens_1 = 1 + (T_lfr_valid - 3 + 2) // 2
         target_len = (1 + (olens_1 - 3 + 2) // 2 - 1) // 2 + 1
+        output_indices = (torch.ones_like(adapt_out[..., :1], dtype=torch.long).cumsum(1) - 1).squeeze(-1)
+        final_output = adapt_out * (output_indices < target_len).type(adapt_out.dtype).unsqueeze(-1)
         
-        output_indices = (torch.ones_like(adapt[..., :1], dtype=torch.long).cumsum(1) - 1).squeeze(-1)
-        final_output = adapt * (output_indices < target_len).type(adapt.dtype).unsqueeze(-1)
-        
-        return enc, final_output
-
-class EncoderExportWrapper(EncoderExportWrapperPaddable):
-    """Legacy Wrapper for compatibility with 01-Export script"""
-    def forward(self, audio):
-        ilens = torch.tensor([audio.shape[-1]], dtype=torch.long, device=audio.device)
-        return super().forward(audio, ilens)
-
-class CTCHeadExportWrapper(nn.Module):
-    def __init__(self, hybrid_model):
-        super().__init__()
-        self.ctc_decoder, self.ctc_proj = hybrid_model.ctc_decoder, hybrid_model.ctc_proj
-    def forward(self, enc_output):
-        h, _ = self.ctc_decoder(enc_output, None)
-        return torch.argmax(self.ctc_proj.ctc_lo(h), dim=-1).to(torch.int32)
+        return (mel, lfr_x) + results[1:] + (enc_final, final_output)

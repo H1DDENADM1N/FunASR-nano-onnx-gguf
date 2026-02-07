@@ -328,6 +328,99 @@ print(result.timings)        # 各阶段耗时
 ✓ 字幕已导出至: input.srt
 ```
 
+### 短音频 onnxruntime-directml GPU srt 字幕转录 (AMD Radeon Graphics Rembrandt)
+```
+[统计]
+  音频长度:   4.55s
+  Decoder输入:   7086 tokens/s (总: 74, prefix:59, audio:10, suffix:5)
+  Decoder输出:     54 tokens/s (总: 15)
+
+[转录耗时]
+  - 音频编码：   528ms
+  - CTC解码：    123ms (Infer: 112ms, Dec: 2ms, HW: 9ms)
+  - Prompt:        1ms
+  - LLM读取：     10ms
+  - LLM生成：    279ms
+  - 时间对齐：     2ms
+  - 推理总计：  0.94s
+
+✓ 字幕已导出至: (20260124-114926)请在接下来的名词之间添加上顿号：苹果、香.srt
+```
+
+### 短音频 onnxruntime-directml 禁用 DirectML GPU srt 字幕转录 (AMD Radeon Graphics Rembrandt)
+```
+[统计]
+  音频长度:   4.55s
+  Decoder输入:   1827 tokens/s (总: 74, prefix:59, audio:10, suffix:5)
+  Decoder输出:     48 tokens/s (总: 17)
+
+[转录耗时]
+  - 音频编码：   141ms
+  - CTC解码：     27ms (Infer: 22ms, Dec: 1ms, HW: 4ms)
+  - Prompt:        1ms
+  - LLM读取：     41ms
+  - LLM生成：    357ms
+  - 时间对齐：     1ms
+  - 推理总计：  0.57s
+
+✓ 字幕已导出至: (20260124-114926)请在接下来的名词之间添加上顿号：苹果、香.srt
+```
+
+### 短音频 onnxruntime-gpu GPU srt 字幕转录 (AMD Radeon Graphics Rembrandt)
+```
+[统计]
+  音频长度:   4.55s
+  Decoder输入:   1828 tokens/s (总: 74, prefix:59, audio:10, suffix:5)
+  Decoder输出:     51 tokens/s (总: 17)
+
+[转录耗时]
+  - 音频编码：   162ms
+  - CTC解码：     27ms (Infer: 22ms, Dec: 1ms, HW: 4ms)
+  - Prompt:        1ms
+  - LLM读取：     40ms
+  - LLM生成：    331ms
+  - 时间对齐：     2ms
+  - 推理总计：  0.56s
+
+✓ 字幕已导出至: (20260124-114926)请在接下来的名词之间添加上顿号：苹果、香.srt
+```
+### 短音频 onnxruntime-gpu GPU 禁用 Vulkan srt 字幕转录 (AMD Radeon Graphics Rembrandt)
+```
+[统计]
+  音频长度:   4.55s
+  Decoder输入:    199 tokens/s (总: 74, prefix:59, audio:10, suffix:5)
+  Decoder输出:     32 tokens/s (总: 17)
+
+[转录耗时]
+  - 音频编码：   160ms
+  - CTC解码：     31ms (Infer: 24ms, Dec: 1ms, HW: 6ms)
+  - Prompt:        1ms
+  - LLM读取：    371ms
+  - LLM生成：    533ms
+  - 时间对齐：     2ms
+  - 推理总计：  1.10s
+
+✓ 字幕已导出至: (20260124-114926)请在接下来的名词之间添加上顿号：苹果、香.srt
+```
+
+### 短音频 onnxruntime CPU 字幕转录 (AMD Ryzen 7 6800H, 4675 MHz)
+```
+[统计]
+  音频长度:   4.55s
+  Decoder输入:    290 tokens/s (总: 74, prefix:59, audio:10, suffix:5)
+  Decoder输出:     39 tokens/s (总: 17)
+
+[转录耗时]
+  - 音频编码：   116ms
+  - CTC解码：     22ms (Infer: 17ms, Dec: 1ms, HW: 4ms)
+  - Prompt:        1ms
+  - LLM读取：    255ms
+  - LLM生成：    434ms
+  - 时间对齐：     1ms
+  - 推理总计：  0.83s
+
+✓ 字幕已导出至: (20260124-114926)请在接下来的名词之间添加上顿号：苹果、香.srt
+```
 ---
 
 ## 常见问题

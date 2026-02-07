@@ -20,7 +20,7 @@ dependencies = [
 cpu = ["onnxruntime>=1.23.2"]
 export-model = [
     "modelscope>=1.34.0",
-    "onnxruntime>=1.23.2",
+    "onnxruntime-directml>=1.23.0",
     "onnxscript>=0.5.7",
     "sentencepiece>=0.2.1",
     "torch>=2.10.0",
